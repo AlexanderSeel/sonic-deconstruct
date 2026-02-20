@@ -1,0 +1,5 @@
+{
+  "name": "Sonic Deconstruct",
+  "description": "An AI-powered audio analysis tool that identifies instruments from samples and provides detailed instructions on how to recreate the sound using VSTs and synthesizers.",
+  "requestFramePermissions": []
+}
