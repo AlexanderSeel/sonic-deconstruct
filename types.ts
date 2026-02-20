@@ -78,4 +78,34 @@ export interface AISettings {
   provider: AIProvider;
   apiKey: string;
   model: string;
+  serverAnalyzeUrl?: string;
+}
+
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  status: 'online' | 'offline';
+  lastSeenAt: number;
+  createdAt: number;
+}
+
+export interface RecreateIteration {
+  iteration: number;
+  score: number;
+  params: Record<string, number>;
+  agentStatus: string;
+  agentMetrics?: Record<string, any> | null;
+  at: number;
+}
+
+export interface RecreateJob {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'stopped' | 'error';
+  deviceId: string;
+  iterations: number;
+  history: RecreateIteration[];
+  bestScore: number;
+  bestIteration: RecreateIteration | null;
+  bestHalionGuide?: HalionParameter[];
+  error?: string;
 }

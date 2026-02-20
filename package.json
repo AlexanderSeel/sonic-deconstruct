@@ -6,13 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "analyze-server": "node server/analyze-server.mjs",
+    "control-server": "node server/control-server.mjs",
+    "agent": "node agent/agent.mjs",
+    "start:all": "npx concurrently -k -n web,analyze,control -c cyan,magenta,green \"npm run dev\" \"npm run analyze-server\" \"npm run control-server\""
   },
   "dependencies": {
     "react-dom": "^19.2.3",
     "lucide-react": "^0.562.0",
     "@google/genai": "^1.36.0",
-    "react": "^19.2.3"
+    "react": "^19.2.3",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

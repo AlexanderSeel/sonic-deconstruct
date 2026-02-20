@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Key, Cpu, AlertCircle } from 'lucide-react';
+import { X, Save, Key, Cpu, AlertCircle, Server } from 'lucide-react';
 import { AISettings, AIProvider } from '../types';
 
 interface SettingsModalProps {
@@ -114,6 +114,24 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings
                          Leave empty to use the built-in default key (if configured in env).
                      </p>
                 )}
+            </div>
+
+            {/* Optional Server Endpoint */}
+            <div className="space-y-2">
+                <label className="text-xs text-slate-400 uppercase font-bold flex items-center gap-2">
+                    <Server className="w-3 h-3" />
+                    Analyze API URL (Optional)
+                </label>
+                <input
+                    type="text"
+                    placeholder="https://your-domain.com/api/analyze"
+                    value={localSettings.serverAnalyzeUrl || ''}
+                    onChange={(e) => setLocalSettings({ ...localSettings, serverAnalyzeUrl: e.target.value.trim() })}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-white focus:border-indigo-500 outline-none placeholder:text-slate-600 font-mono"
+                />
+                <p className="text-[10px] text-slate-500">
+                    When set, audio analysis is routed to this backend endpoint instead of directly from the browser.
+                </p>
             </div>
 
             {/* Warning for OpenAI */}

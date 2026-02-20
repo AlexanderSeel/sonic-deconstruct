@@ -6,6 +6,7 @@ import { generateAISoundSample } from '../services/aiService';
 import { analyzeSignal, AudioStats } from '../utils/audioAnalyzer';
 import WaveformEditor from './WaveformEditor';
 import { sliceAudioBuffer, audioBufferToWavBlob } from '../utils/audioHelpers';
+import RemoteRecreatePanel from './RemoteRecreatePanel';
 import { Activity, Disc, Zap, ExternalLink, Search, Save, Check, Layers, FileCode, Download, Play, Pause, Music2, Settings2, CheckSquare, Square, Sparkles, Repeat, Maximize2, Sliders, Filter, Box, Mic2 } from 'lucide-react';
 
 interface AnalysisViewProps {
@@ -689,6 +690,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
           </div>
         </div>
       </div>
+
+      <RemoteRecreatePanel analysis={data} />
 
       {/* Effects Chain Detailed View */}
       {data.detailedEffects && data.detailedEffects.length > 0 && (

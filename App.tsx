@@ -21,7 +21,8 @@ const App: React.FC = () => {
   const [aiSettings, setAiSettings] = useState<AISettings>({
     provider: 'gemini',
     apiKey: '',
-    model: 'gemini-3-pro-preview'
+    model: 'gemini-3-pro-preview',
+    serverAnalyzeUrl: ''
   });
 
   // Audio Data
