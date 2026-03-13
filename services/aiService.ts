@@ -59,6 +59,21 @@ const normalizeAnalysisResult = (raw: any): AnalysisResult => {
     return result;
 };
 
+const extractInlineAudioData = (response: any): string | null => {
+    const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
+    for (const candidate of candidates) {
+        const parts = candidate?.content?.parts;
+        if (!Array.isArray(parts)) continue;
+        for (const part of parts) {
+            const audioData = part?.inlineData?.data;
+            if (typeof audioData === 'string' && audioData.length > 0) {
+                return audioData;
+            }
+        }
+    }
+    return null;
+};
+
 // --- PROMPTS ---
 
 const PROMPT_INTRO = `
@@ -290,9 +305,10 @@ const generateSoundGemini = async (instrumentName: string, description: string, 
     if (!apiKey) throw new Error("Gemini API key is missing.");
     const ai = new GoogleGenAI({ apiKey });
     const prompt = `Create an audio representation of this instrument: "${instrumentName}". Timbre details: ${description}. Perform a single note or short phrase characteristic of this instrument. Do not speak.`;
+    const modelId = settings.model || "gemini-2.5-flash-preview-tts";
 
     const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
+        model: modelId,
         contents: { parts: [{ text: prompt }] },
         config: {
           responseModalities: [Modality.AUDIO],
@@ -300,8 +316,10 @@ const generateSoundGemini = async (instrumentName: string, description: string, 
         }
     });
 
-    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioData) throw new Error("No audio data returned from Gemini.");
+    const audioData = extractInlineAudioData(response);
+    if (!audioData) {
+        throw new Error(`No audio data returned from Gemini model "${modelId}".`);
+    }
     return audioData;
 };
 
@@ -374,5 +392,8 @@ export const generateAISoundSample = async (
     settings?: AISettings
 ): Promise<string> => {
     const config = settings || { provider: 'gemini', apiKey: GEMINI_ENV_KEY, model: 'gemini-2.5-flash-preview-tts' };
+    if (config.provider === 'openai') {
+        throw new Error("OpenAI audio generation is not configured in this app yet.");
+    }
     return await generateSoundGemini(instrumentName, description, config);
 };

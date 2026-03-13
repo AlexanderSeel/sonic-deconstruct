@@ -1,32 +1,7 @@
-import { AnalysisResult, HalionParameter, EffectDef } from '../types';
-import { encodeWAV, normalizeAudioBuffer } from './audioHelpers';
+import { AnalysisResult } from '../types';
+import { audioBufferToWavBlob, normalizeAudioBuffer } from './audioHelpers';
 import { analyzeSignal } from './audioAnalyzer';
-
-// Parameter Helpers
-const getVal = (valStr: string): number => {
-    if (!valStr) return 0;
-    const v = valStr.toString().replace(/hz|khz|ms|%|db|sec|s/gi, '').trim();
-    const num = parseFloat(v);
-    return (!isNaN(num) && isFinite(num)) ? num : 0;
-};
-
-const getParameterValue = (params: (HalionParameter | string)[], searchKeys: string[]): number | null => {
-  for (const p of params) {
-    if (typeof p === 'string') continue;
-    const match = searchKeys.some(key => p.parameter.toLowerCase().includes(key.toLowerCase()));
-    if (match) return getVal(p.value);
-  }
-  return null;
-};
-
-const getStringValue = (params: (HalionParameter | string)[], searchKeys: string[]): string | null => {
-  for (const p of params) {
-    if (typeof p === 'string') continue;
-    const match = searchKeys.some(key => p.parameter.toLowerCase().includes(key.toLowerCase()));
-    if (match) return p.value.toLowerCase();
-  }
-  return null;
-};
+import { getSynthPatchConfig, SynthPatchConfig } from './synthConfig';
 
 // --- SYNTHESIS CORE ---
 
@@ -36,20 +11,21 @@ export const generateSynthesizedSample = async (
   duration: number = 2.0,
   useSampleSource: boolean = false,
   sampleBuffer: AudioBuffer | null = null,
-  shouldNormalize: boolean = false
+  shouldNormalize: boolean = false,
+  patchOverride?: SynthPatchConfig
 ): Promise<{ blob: Blob, buffer: AudioBuffer }> => {
-  
   const sampleRate = 44100;
   const tail = 1.0; 
   const totalDuration = duration + tail;
   const ctx = new OfflineAudioContext(2, sampleRate * totalDuration, sampleRate);
-  
-  const params = data.halionGuide || [];
+  const patch = patchOverride || getSynthPatchConfig(data);
+  const activeFilters = patch.filters.filter(filter => filter.enabled);
+  const activeOscillators = patch.oscillators.filter(oscillator => oscillator.enabled);
   
   // Master Bus
   const masterGain = ctx.createGain();
   masterGain.connect(ctx.destination);
-  masterGain.gain.value = 0.8;
+  masterGain.gain.value = Math.pow(10, patch.volume / 20);
 
   // 1. GENERATOR SECTION
   if (useSampleSource && sampleBuffer) {
@@ -72,13 +48,11 @@ export const generateSynthesizedSample = async (
       sourceNode.loop = true; // Loop for sustain
 
       // Apply the AI-detected Envelope to the source (Sculpting)
-      const env = createEnvelope(ctx, params, duration);
-      
-      // Apply Filter if detected
-      const filter = createFilter(ctx, params);
-      
-      sourceNode.connect(filter);
-      filter.connect(env);
+      const env = createEnvelope(ctx, patch, duration);
+      const filterInput = createFilterChain(ctx, activeFilters);
+
+      sourceNode.connect(filterInput.entry);
+      filterInput.exit.connect(env);
       env.connect(masterGain);
       
       sourceNode.start(0);
@@ -86,36 +60,25 @@ export const generateSynthesizedSample = async (
 
   } else {
       // --- OSCILLATOR SYNTH MODE ---
-      const oscTypeStr = getStringValue(params, ["Osc 1.Waveform", "Osc 1.Shape", "Osc 1.Type"]) || "sawtooth";
-      let type: OscillatorType = 'sawtooth';
-      if (oscTypeStr.includes('sin')) type = 'sine';
-      else if (oscTypeStr.includes('tri')) type = 'triangle';
-      else if (oscTypeStr.includes('squ') || oscTypeStr.includes('pul')) type = 'square';
+      const oscillators = activeOscillators.length > 0 ? activeOscillators : patch.oscillators.slice(0, 1);
+      const filterInput = createFilterChain(ctx, activeFilters);
+      const env = createEnvelope(ctx, patch, duration);
 
-      const isMulti = data.architecture === "Multi-Layer" || data.zoneType === "Wavetable";
-      const voices = isMulti ? 3 : 1;
-      const detuneSpread = 10; // cents
-
-      const filter = createFilter(ctx, params);
-      const env = createEnvelope(ctx, params, duration);
-
-      for (let i = 0; i < voices; i++) {
+      for (const oscillatorConfig of oscillators) {
           const osc = ctx.createOscillator();
-          osc.type = type;
-          
-          let detune = 0;
-          if (voices > 1) {
-              detune = (i - (voices - 1) / 2) * detuneSpread;
-          }
-          osc.detune.value = detune;
-          osc.frequency.value = targetFrequency;
+          const oscillatorGain = ctx.createGain();
+          osc.type = oscillatorConfig.type;
+          osc.detune.value = oscillatorConfig.detune;
+          osc.frequency.value = targetFrequency * Math.pow(2, oscillatorConfig.octave);
+          oscillatorGain.gain.value = oscillatorConfig.level;
 
-          osc.connect(filter);
+          osc.connect(oscillatorGain);
+          oscillatorGain.connect(filterInput.entry);
           osc.start(0);
           osc.stop(totalDuration);
       }
 
-      filter.connect(env);
+      filterInput.exit.connect(env);
       env.connect(masterGain);
   }
 
@@ -127,28 +90,19 @@ export const generateSynthesizedSample = async (
       renderedBuffer = normalizeAudioBuffer(renderedBuffer);
   }
 
-  const channelData = renderedBuffer.getChannelData(0);
-  const blob = encodeWAV(channelData, sampleRate);
+  const blob = audioBufferToWavBlob(renderedBuffer);
 
   return { blob, buffer: renderedBuffer };
 };
 
 // --- HELPER COMPONENTS ---
 
-const createEnvelope = (ctx: BaseAudioContext, params: (HalionParameter | string)[], duration: number) => {
+const createEnvelope = (ctx: BaseAudioContext, patch: ReturnType<typeof getSynthPatchConfig>, duration: number) => {
   const gain = ctx.createGain();
-  
-  // Extract AI values
-  let attack = getParameterValue(params, ["Amp Env.Attack", "Attack"]) || 0.01;
-  let decay = getParameterValue(params, ["Amp Env.Decay", "Decay"]) || 0.1;
-  let sustain = getParameterValue(params, ["Amp Env.Sustain", "Sustain"]) || 100;
-  let release = getParameterValue(params, ["Amp Env.Release", "Release"]) || 0.1;
-
-  // Convert large numbers (ms) to seconds
-  if (attack > 10) attack /= 1000;
-  if (decay > 10) decay /= 1000;
-  if (release > 10) release /= 1000;
-  if (sustain > 1.0) sustain /= 100; // Normalize 0-100 to 0-1
+  let attack = patch.attack;
+  let decay = patch.decay;
+  let sustain = patch.sustain;
+  let release = patch.release;
 
   // Constraint Logic (The "Envelope Too Large" Fix)
   // Ensure Attack/Decay fit within the note duration
@@ -174,19 +128,27 @@ const createEnvelope = (ctx: BaseAudioContext, params: (HalionParameter | string
   return gain;
 };
 
-const createFilter = (ctx: BaseAudioContext, params: (HalionParameter | string)[]) => {
-    const filter = ctx.createBiquadFilter();
-    
-    const cutoff = getParameterValue(params, ["Filter.Cutoff", "Cutoff", "Freq"]) || 20000;
-    const res = getParameterValue(params, ["Filter.Res", "Resonance", "Q"]) || 0;
-    const typeStr = getStringValue(params, ["Filter.Type", "Mode"]) || "lowpass";
+const createFilterChain = (ctx: BaseAudioContext, filters: ReturnType<typeof getSynthPatchConfig>['filters']) => {
+    const input = ctx.createGain();
+    let current: AudioNode = input;
 
-    filter.frequency.value = Math.min(22000, Math.max(20, cutoff));
-    filter.Q.value = res;
-    
-    if (typeStr.includes('high')) filter.type = 'highpass';
-    else if (typeStr.includes('band')) filter.type = 'bandpass';
-    else filter.type = 'lowpass';
+    if (filters.length === 0) {
+      return { entry: input, exit: input };
+    }
 
-    return filter;
+    for (const filterConfig of filters) {
+      const filter = ctx.createBiquadFilter();
+      const drive = ctx.createGain();
+
+      filter.frequency.value = filterConfig.cutoff;
+      filter.Q.value = filterConfig.q;
+      filter.type = filterConfig.type;
+      drive.gain.value = 1 + (filterConfig.drive * 4);
+
+      current.connect(filter);
+      filter.connect(drive);
+      current = drive;
+    }
+
+    return { entry: input, exit: current };
 };

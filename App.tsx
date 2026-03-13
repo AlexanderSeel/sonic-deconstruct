@@ -12,6 +12,21 @@ import { AlertCircle, Loader2, RefreshCw, Play, Pause, Trash2, ChevronDown, Wand
 import { sliceAudioBuffer, audioBufferToWavBlob } from './utils/audioHelpers';
 import { autoSliceAudio } from './utils/autoSlicer';
 
+interface ExportedWorkspace {
+  audioFileName: string | null;
+  audioBase64: string | null;
+  regions: AudioRegion[];
+  expandedRegionId: string | null;
+}
+
+interface ExportedSession {
+  version: 1;
+  exportedAt: string;
+  settings: AISettings;
+  history: HistoryItem[];
+  workspace: ExportedWorkspace;
+}
+
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -49,6 +64,7 @@ const App: React.FC = () => {
   // Global Drag State
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const dragCounter = useRef(0);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     // History Load
@@ -79,6 +95,35 @@ const App: React.FC = () => {
       localStorage.setItem('sonic_settings', JSON.stringify(newSettings));
   };
 
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const decodeBase64AudioToBuffer = async (base64Audio: string): Promise<AudioBuffer> => {
+    const binaryString = window.atob(base64Audio);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    const AudioContextConstructor = window.AudioContext || (window as any).webkitAudioContext;
+    const audioContext = new AudioContextConstructor();
+    try {
+      return await audioContext.decodeAudioData(bytes.buffer.slice(0));
+    } finally {
+      await audioContext.close();
+    }
+  };
+
   const processFile = async (file: File) => {
     setAppState(AppState.ANALYZING);
     setErrorMsg(null);
@@ -96,14 +141,7 @@ const App: React.FC = () => {
       setDecodedAudioBuffer(decodedBuffer);
       audioContext.close();
 
-      const defaultRegion: AudioRegion = {
-        id: crypto.randomUUID(),
-        name: 'Full Track',
-        start: 0,
-        end: decodedBuffer.duration,
-        status: 'pending'
-      };
-      setRegions([defaultRegion]);
+      setRegions([]);
       setAppState(AppState.READY);
 
     } catch (err: any) {
@@ -194,11 +232,7 @@ const App: React.FC = () => {
         status: 'pending'
     }));
 
-    let updatedRegions = [...regions];
-    if (updatedRegions.length === 1 && updatedRegions[0].name === 'Full Track' && updatedRegions[0].status === 'pending') {
-        updatedRegions = []; 
-    }
-    setRegions([...updatedRegions, ...newRegions]);
+    setRegions(prev => [...prev, ...newRegions]);
   };
 
   const handleDeleteRegion = (id: string) => {
@@ -314,19 +348,6 @@ const App: React.FC = () => {
       performAnalysis([regionId]);
   };
 
-  const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        const base64 = result.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = error => reject(error);
-      reader.readAsDataURL(blob);
-    });
-  };
-
   const resetApp = () => {
     setAppState(AppState.IDLE);
     setAudioFileName(null);
@@ -375,6 +396,95 @@ const App: React.FC = () => {
   };
 
   const getPendingCount = () => regions.filter(r => r.status === 'pending').length;
+  const canExportSession = !!decodedAudioBuffer || regions.length > 0 || history.length > 0 || !!audioFileName;
+
+  const exportSession = async () => {
+    try {
+      let audioBase64: string | null = null;
+      if (decodedAudioBuffer) {
+        audioBase64 = await blobToBase64(audioBufferToWavBlob(decodedAudioBuffer));
+      }
+
+      const payload: ExportedSession = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        settings: aiSettings,
+        history,
+        workspace: {
+          audioFileName,
+          audioBase64,
+          regions,
+          expandedRegionId
+        }
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      const safeName = (audioFileName || 'sonic-session').replace(/[^\w.-]+/g, '_');
+      link.download = `${safeName}.sonic.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      console.error("Failed to export session", error);
+      alert("Could not export session JSON.");
+    }
+  };
+
+  const applyImportedSession = async (session: ExportedSession) => {
+    stopRegionPlayback();
+    setErrorMsg(null);
+    setIsDraggingFile(false);
+    dragCounter.current = 0;
+    setIsHistoryOpen(false);
+    setIsSliceModalOpen(false);
+
+    setAiSettings(session.settings);
+    localStorage.setItem('sonic_settings', JSON.stringify(session.settings));
+
+    setHistory(session.history);
+    localStorage.setItem('sonic_history', JSON.stringify(session.history));
+
+    setAudioFileName(session.workspace.audioFileName);
+    setRegions(session.workspace.regions || []);
+    setExpandedRegionId(session.workspace.expandedRegionId || null);
+
+    if (session.workspace.audioBase64) {
+      setAppState(AppState.ANALYZING);
+      const restoredBuffer = await decodeBase64AudioToBuffer(session.workspace.audioBase64);
+      setDecodedAudioBuffer(restoredBuffer);
+      setAppState(AppState.READY);
+    } else {
+      setDecodedAudioBuffer(null);
+      setAppState((session.workspace.regions?.length || session.workspace.audioFileName) ? AppState.READY : AppState.IDLE);
+    }
+  };
+
+  const importSession = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as ExportedSession;
+
+      if (parsed.version !== 1 || !parsed.workspace || !parsed.settings || !Array.isArray(parsed.history)) {
+        throw new Error("Unsupported Sonic session format.");
+      }
+
+      await applyImportedSession(parsed);
+    } catch (error: any) {
+      console.error("Failed to import session", error);
+      alert(error?.message || "Could not import session JSON.");
+    }
+  };
 
   return (
     <div 
@@ -388,6 +498,17 @@ const App: React.FC = () => {
         onToggleHistory={() => setIsHistoryOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         currentProvider={aiSettings.provider}
+        onExportSession={() => void exportSession()}
+        onImportSession={importSession}
+        canExportSession={canExportSession}
+      />
+
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => void handleImportFile(e)}
       />
       
       {/* Global Drop Overlay */}

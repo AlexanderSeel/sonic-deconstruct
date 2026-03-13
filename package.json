@@ -13,10 +13,11 @@
     "start:all": "npx concurrently -k -n web,analyze,control -c cyan,magenta,green \"npm run dev\" \"npm run analyze-server\" \"npm run control-server\""
   },
   "dependencies": {
-    "react-dom": "^19.2.3",
-    "lucide-react": "^0.562.0",
     "@google/genai": "^1.36.0",
+    "lucide-react": "^0.562.0",
     "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "tone": "^15.1.22",
     "ws": "^8.18.3"
   },
   "devDependencies": {

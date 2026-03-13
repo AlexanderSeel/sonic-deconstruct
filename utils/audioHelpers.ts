@@ -34,6 +34,20 @@ export const encodeWAV = (samples: Float32Array, sampleRate: number) => {
   return new Blob([view], { type: 'audio/wav' });
 };
 
+const interleaveChannels = (buffer: AudioBuffer): Float32Array => {
+  const channelCount = buffer.numberOfChannels;
+  const length = buffer.length * channelCount;
+  const interleaved = new Float32Array(length);
+
+  for (let sampleIndex = 0; sampleIndex < buffer.length; sampleIndex++) {
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+      interleaved[sampleIndex * channelCount + channelIndex] = buffer.getChannelData(channelIndex)[sampleIndex];
+    }
+  }
+
+  return interleaved;
+};
+
 // Slice an AudioBuffer into a new AudioBuffer (single channel for analysis)
 export const sliceAudioBuffer = (buffer: AudioBuffer, start: number, end: number): AudioBuffer => {
     const sampleRate = buffer.sampleRate;
@@ -95,6 +109,34 @@ export const normalizeAudioBuffer = (buffer: AudioBuffer): AudioBuffer => {
 };
 
 export const audioBufferToWavBlob = (buffer: AudioBuffer): Blob => {
-    const data = buffer.getChannelData(0);
-    return encodeWAV(data, buffer.sampleRate);
+    const channelCount = buffer.numberOfChannels;
+    const interleaved = interleaveChannels(buffer);
+    const bytesPerSample = 2;
+    const blockAlign = channelCount * bytesPerSample;
+    const byteRate = buffer.sampleRate * blockAlign;
+    const wavBuffer = new ArrayBuffer(44 + interleaved.length * bytesPerSample);
+    const view = new DataView(wavBuffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + interleaved.length * bytesPerSample, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, channelCount, true);
+    view.setUint32(24, buffer.sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, interleaved.length * bytesPerSample, true);
+
+    let offset = 44;
+    for (let i = 0; i < interleaved.length; i++) {
+      const sample = Math.max(-1, Math.min(1, interleaved[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += bytesPerSample;
+    }
+
+    return new Blob([view], { type: 'audio/wav' });
 }

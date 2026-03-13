@@ -1,13 +1,23 @@
 import React from 'react';
-import { Waves, Music4, History, Settings } from 'lucide-react';
+import { Waves, Music4, History, Settings, Download, Upload } from 'lucide-react';
 
 interface HeaderProps {
   onToggleHistory: () => void;
   onOpenSettings: () => void;
   currentProvider: string;
+  onExportSession: () => void;
+  onImportSession: () => void;
+  canExportSession: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ onToggleHistory, onOpenSettings, currentProvider }) => {
+const Header: React.FC<HeaderProps> = ({
+  onToggleHistory,
+  onOpenSettings,
+  currentProvider,
+  onExportSession,
+  onImportSession,
+  canExportSession
+}) => {
   return (
     <header className="w-full py-6 px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-50">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -23,6 +33,25 @@ const Header: React.FC<HeaderProps> = ({ onToggleHistory, onOpenSettings, curren
           </div>
         </div>
         <div className="flex items-center gap-3 text-sm text-slate-400">
+          <button
+            onClick={onImportSession}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors text-slate-400 hover:text-white"
+            title="Import workspace JSON"
+          >
+            <Upload className="w-4 h-4" />
+            <span className="hidden sm:inline">Import</span>
+          </button>
+
+          <button
+            onClick={onExportSession}
+            disabled={!canExportSession}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors text-slate-400 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Export workspace JSON"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
+
            <button 
             onClick={onOpenSettings}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors text-slate-400 hover:text-white"

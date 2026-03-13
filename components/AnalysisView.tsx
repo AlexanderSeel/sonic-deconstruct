@@ -7,6 +7,10 @@ import { analyzeSignal, AudioStats } from '../utils/audioAnalyzer';
 import WaveformEditor from './WaveformEditor';
 import { sliceAudioBuffer, audioBufferToWavBlob } from '../utils/audioHelpers';
 import RemoteRecreatePanel from './RemoteRecreatePanel';
+import ResynthKeyboard from './ResynthKeyboard';
+import { cloneSynthPatchConfig, getSynthPatchConfig, SynthPatchConfig } from '../utils/synthConfig';
+import ResynthEditorModal from './ResynthEditorModal';
+import ResynthKeyboardModal from './ResynthKeyboardModal';
 import { Activity, Disc, Zap, ExternalLink, Search, Save, Check, Layers, FileCode, Download, Play, Pause, Music2, Settings2, CheckSquare, Square, Sparkles, Repeat, Maximize2, Sliders, Filter, Box, Mic2 } from 'lucide-react';
 
 interface AnalysisViewProps {
@@ -46,6 +50,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
   const [generationMode, setGenerationMode] = useState<GenerationMode>('oscillator');
   const [generatedBlob, setGeneratedBlob] = useState<Blob | null>(null);
   const [generatedBuffer, setGeneratedBuffer] = useState<AudioBuffer | null>(null);
+  const [generationMessage, setGenerationMessage] = useState<string | null>(null);
+  const [resynthPatch, setResynthPatch] = useState<SynthPatchConfig>(() => getSynthPatchConfig(data));
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   
   // Editor State for Output
   const [outputRegions, setOutputRegions] = useState<AudioRegion[]>([]);
@@ -58,6 +66,12 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const analyzedPatch = useMemo(() => getSynthPatchConfig(data), [data]);
+  const selectedOutputLoop = useMemo(() => outputRegions.find(region => region.id === 'output-loop') || null, [outputRegions]);
+
+  useEffect(() => {
+    setResynthPatch(cloneSynthPatchConfig(analyzedPatch));
+  }, [analyzedPatch]);
 
   // Run DSP analysis on mount
   useEffect(() => {
@@ -237,39 +251,51 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
       setIsPlayingPreview(false);
     }
 
+    setGenerationMessage(null);
+
+    const renderDeterministicSample = async (message: string) => {
+      const useSampleSource = generationMode === 'sample' || (generationMode === 'ai' && data.zoneType === 'Sample' && !!originalAudioBuffer);
+      const { blob, buffer } = await generateSynthesizedSample(
+        data,
+        selectedOctave,
+        2.0,
+        useSampleSource,
+        originalAudioBuffer || null,
+        shouldNormalize,
+        resynthPatch
+      );
+      setGeneratedBlob(blob);
+      setGeneratedBuffer(buffer);
+      setGenerationMessage(message);
+    };
+
     try {
       if (generationMode === 'ai') {
           setSynthesisState('GENERATING_AI');
-          const base64Audio = await generateAISoundSample(
-              data.instrumentName, 
-              data.timbreDescription,
-              settings
-          );
-          
           try {
+              const base64Audio = await generateAISoundSample(
+                  data.instrumentName, 
+                  data.timbreDescription,
+                  settings
+              );
               const { buffer, blob } = await decodeAIResponse(base64Audio);
               setGeneratedBuffer(buffer);
               setGeneratedBlob(blob);
+              setGenerationMessage("AI audio generation succeeded.");
           } catch (e) {
-              console.warn("Standard decode failed", e);
-              alert("Could not decode AI Audio.");
+              console.warn("AI generation fallback engaged", e);
+              await renderDeterministicSample("Gemini did not return usable audio, so a local resynth patch was generated instead.");
           }
 
       } else {
           setSynthesisState('SYNTHESIZING_OSC');
           // Short delay to allow UI to update
           await new Promise(r => setTimeout(r, 50));
-          
-          const { blob, buffer } = await generateSynthesizedSample(
-              data, 
-              selectedOctave, 
-              2.0,
-              generationMode === 'sample',
-              originalAudioBuffer || null,
-              shouldNormalize
+          await renderDeterministicSample(
+            generationMode === 'sample'
+              ? "Rendered by adapting the original sample with the analyzed envelope."
+              : "Rendered by the local oscillator-based resynth engine."
           );
-          setGeneratedBlob(blob);
-          setGeneratedBuffer(buffer);
       }
     } catch (e) {
       console.error("Synthesis failed", e);
@@ -313,6 +339,23 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
 
   return (
     <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <ResynthEditorModal
+        isOpen={isEditorOpen}
+        onClose={() => setIsEditorOpen(false)}
+        patch={resynthPatch}
+        analyzedPatch={analyzedPatch}
+        onChange={setResynthPatch}
+      />
+      <ResynthKeyboardModal
+        isOpen={isKeyboardOpen}
+        onClose={() => setIsKeyboardOpen(false)}
+        analysis={data}
+        originalAudioBuffer={originalAudioBuffer}
+        rootNote={dspStats?.note || null}
+        patch={resynthPatch}
+        playbackBuffer={generatedBuffer}
+        playbackLoop={selectedOutputLoop}
+      />
       
       {/* Top Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -465,6 +508,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
                     </button>
                     <button
                         onClick={() => setGenerationMode('ai')}
+                        title="Attempts Gemini audio generation and falls back to local resynthesis if needed"
                         className={`flex-1 text-xs py-1.5 rounded transition-colors flex items-center justify-center gap-1 ${generationMode === 'ai' ? 'bg-purple-600 text-white shadow-lg' : 'text-purple-300 hover:text-white hover:bg-slate-800'}`}
                     >
                         <Sparkles className="w-3 h-3" /> AI Gen
@@ -495,6 +539,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
                    </select>
                  </div>
                )}
+               <button
+                 onClick={() => setIsEditorOpen(true)}
+                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/20 transition-colors"
+               >
+                 <Maximize2 className="w-4 h-4" />
+                 Patch Designer
+               </button>
                <button 
                  onClick={handleSynthesize}
                  disabled={synthesisState !== 'IDLE'}
@@ -512,6 +563,31 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
                  )}
                </button>
             </div>
+
+            <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-cyan-300">Osc Bank</div>
+                <div className="text-sm text-white mt-1">{resynthPatch.oscillators.filter(osc => osc.enabled).length} active oscillators</div>
+              </div>
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-amber-300">Filter Rack</div>
+                <div className="text-sm text-white mt-1">{resynthPatch.filters.filter(filter => filter.enabled).length} active filters</div>
+              </div>
+              <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-indigo-300">Envelope</div>
+                <div className="text-sm text-white mt-1">{resynthPatch.attack.toFixed(2)} / {resynthPatch.decay.toFixed(2)} / {resynthPatch.release.toFixed(2)} s</div>
+              </div>
+              <div className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/10 px-4 py-3">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-fuchsia-300">FX</div>
+                <div className="text-sm text-white mt-1">Rev {Math.round(resynthPatch.effects.reverbWet * 100)}% • Drive {Math.round(resynthPatch.effects.distortion * 100)}%</div>
+              </div>
+            </div>
+
+            {generationMessage && (
+              <div className="mb-4 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                {generationMessage}
+              </div>
+            )}
             
             <div className="bg-slate-900/50 rounded-lg border border-slate-700/50 p-2 min-h-[100px] mb-4 relative group/vis">
                {generatedBuffer ? (
@@ -530,6 +606,29 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({ data, onSave, isSaved, orig
                     <span className="text-xs text-slate-600 italic">No waveform generated yet</span>
                  </div>
                )}
+            </div>
+
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-xs text-slate-400">
+                Use the compact keyboard here, or open a larger performance view for more octaves.
+              </div>
+              <button
+                onClick={() => setIsKeyboardOpen(true)}
+                className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors text-sm"
+              >
+                Expanded Keys
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <ResynthKeyboard
+                analysis={data}
+                originalAudioBuffer={originalAudioBuffer}
+                rootNote={dspStats?.note || null}
+                patch={resynthPatch}
+                playbackBuffer={generatedBuffer}
+                playbackLoop={selectedOutputLoop}
+              />
             </div>
 
             <div className="flex gap-3">
